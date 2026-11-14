@@ -15,7 +15,8 @@ import (
 )
 
 // ValidateRuntimeMounts checks the managed Lima config: only the Workcell
-// mounts, through only the mount type the launcher selected for this host.
+// mounts plus the read-only Colima cache root, through only the mount type
+// the launcher selected for this host.
 func ValidateRuntimeMounts(configPath, workspace, profile, mountType string) error {
 	config, err := loadYAMLMap(configPath)
 	if err != nil {
@@ -76,6 +77,17 @@ func expectedTokenHandoffMount() (string, error) {
 	return canonicalizeConfigPath(filepath.Join(CacheRoot(home), "workcell-token-handoff"))
 }
 
+// expectedColimaCacheRoot is the host cache root Colima itself appends to the
+// generated Lima mounts. It uses CacheRoot so the launcher and this check
+// name the same directory.
+func expectedColimaCacheRoot() (string, error) {
+	home, err := canonicalizeConfigPath(userHome())
+	if err != nil {
+		return "", err
+	}
+	return canonicalizeConfigPath(CacheRoot(home))
+}
+
 func validateManagedMounts(mountsRaw any, workspace, profile string) error {
 	expected, err := canonicalizeConfigPath(workspace)
 	if err != nil {
@@ -86,6 +98,10 @@ func validateManagedMounts(mountsRaw any, workspace, profile string) error {
 		return err
 	}
 	tokenHandoffMount, err := expectedTokenHandoffMount()
+	if err != nil {
+		return err
+	}
+	cacheRoot, err := expectedColimaCacheRoot()
 	if err != nil {
 		return err
 	}
@@ -115,12 +131,28 @@ func validateManagedMounts(mountsRaw any, workspace, profile string) error {
 			}
 		}
 
+		// Lima decodes the YAML 1.1 spellings yes, on, and y into a typed bool.
+		// yaml.v3 keeps those spellings as strings in this map. A present
+		// non-bool writable value must not pass as read-only. A writable cache
+		// root, in either spelling, must stay rejected.
+		if value, present := mount["writable"]; present {
+			if _, isBool := value.(bool); !isBool {
+				return fmt.Errorf("colima profile %s has an unexpected writable host mount: %s", profile, rawLocation)
+			}
+		}
 		if yamlBool(mount, "writable") {
 			if _, ok := writableMounts[location]; ok {
 				writableMounts[location] = true
 				continue
 			}
 			return fmt.Errorf("colima profile %s has an unexpected writable host mount: %s", profile, rawLocation)
+		}
+		// Colima appends CacheDir() to the generated Lima mounts with writable
+		// set to false, and drops that mount only when another mount is a
+		// prefix of the root. Workcell stages under the root, so Colima keeps
+		// it. Accept exactly that root, and only on this read-only path.
+		if location == cacheRoot {
+			continue
 		}
 		if _, ok := cacheMounts[location]; ok {
 			cacheMounts[location] = true

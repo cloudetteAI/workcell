@@ -47,10 +47,18 @@ The managed Colima VM mounts these roots as read-only. These mounts do not give
 the runtime durable write access outside the selected workspace. GitHub
 publication remains a separate host action.
 
+Colima also mounts the cache root `<cache>/colima` into the VM. The mount is
+read-only. `validateManagedMounts` in `internal/colimautil/colima.go` accepts
+that exact path only when the mount is read-only. A writable root, a parent
+path, a sibling path, or another mount point stays out.
+`TestValidateRuntimeMountsColimaCacheRoot` in
+`internal/colimautil/colima_test.go` checks each case.
+
 Invariant `snapshot-store-host-owned`: `workcell session snapshot` writes to
 `<cache>/colima/workcell-snapshots`. No container mounts this store.
 Workcell refuses a workspace that contains the store or is inside it.
 `scripts/verify-invariants.sh` checks this with dry runs.
+The read-only cache root makes this store readable in the VM.
 
 Workcell opens the store through no-follow descriptors. It runs git only while
 the store path still names the opened directory. It fsyncs the new objects, the

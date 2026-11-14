@@ -190,6 +190,10 @@ The fixes are below.
 
 ### Fixed
 
+- Managed Colima prepare accepts the read-only Colima cache root in `lima.yaml`.
+  Colima adds that mount, and Workcell stages under it.
+  A writable cache root stays rejected.
+  `internal/colimautil/colima.go` checks the path (#988).
 - The scheduled Rust fuzz lane builds again. Its dated nightly
   (`nightly-2026-07-02`, rustc 1.98) was older than the crate's
   `rust-version` of 1.99, so cargo refused to build the fuzz targets. The lane

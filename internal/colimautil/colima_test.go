@@ -76,6 +76,147 @@ func TestValidateRuntimeMountsRequiresWorkcellCacheMounts(t *testing.T) {
 	}
 }
 
+func TestValidateRuntimeMountsColimaCacheRoot(t *testing.T) {
+	tmp := t.TempDir()
+	home := filepath.Join(tmp, "home")
+	workspace := filepath.Join(tmp, "workspace")
+	cache := CacheRoot(home)
+	hostInputs := filepath.Join(cache, "workcell-host-inputs")
+	shadow := filepath.Join(cache, "workcell-shadow")
+	tokenHandoff := filepath.Join(cache, "workcell-token-handoff")
+	parent := filepath.Dir(cache)
+	sibling := cache + "-other"
+	extension := cache + "x"
+	child := filepath.Join(cache, "workcell-snapshots")
+	for _, path := range []string{home, workspace, hostInputs, shadow, tokenHandoff, sibling, extension, child} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+
+	required := "  - location: " + workspace + "\n" +
+		"    writable: true\n" +
+		"  - location: " + tokenHandoff + "\n" +
+		"    writable: true\n" +
+		"  - location: " + hostInputs + "\n" +
+		"    writable: false\n" +
+		"  - location: " + shadow + "\n" +
+		"    writable: false\n"
+	readOnlyRoot := "  - location: " + cache + "\n" +
+		"    writable: false\n"
+
+	for _, tc := range []struct {
+		name, mounts, wantErr string
+	}{
+		{name: "read-only root", mounts: required + readOnlyRoot},
+		{
+			name: "read-only root with matching mount point",
+			mounts: required +
+				"  - location: " + cache + "\n" +
+				"    mountPoint: " + cache + "\n" +
+				"    writable: false\n",
+		},
+		{
+			name: "read-only root with trailing slash",
+			mounts: required +
+				"  - location: " + cache + "/\n" +
+				"    writable: false\n",
+		},
+		{
+			name:    "writable root",
+			mounts:  required + "  - location: " + cache + "\n    writable: true\n",
+			wantErr: "unexpected writable host mount",
+		},
+		{
+			name: "writable root with matching mount point",
+			mounts: required +
+				"  - location: " + cache + "\n" +
+				"    mountPoint: " + cache + "\n" +
+				"    writable: true\n",
+			wantErr: "unexpected writable host mount",
+		},
+		{
+			name:    "yaml 1.1 yes on cache root",
+			mounts:  required + "  - location: " + cache + "\n    writable: yes\n",
+			wantErr: "unexpected writable host mount",
+		},
+		{
+			name:    "yaml 1.1 yes on host inputs",
+			mounts:  required + "  - location: " + hostInputs + "\n    writable: yes\n",
+			wantErr: "unexpected writable host mount",
+		},
+		{
+			name:    "sibling",
+			mounts:  required + "  - location: " + sibling + "\n    writable: false\n",
+			wantErr: "unexpected host mount",
+		},
+		{
+			name:    "parent",
+			mounts:  required + "  - location: " + parent + "\n    writable: false\n",
+			wantErr: "unexpected host mount",
+		},
+		{
+			name:    "prefix extension",
+			mounts:  required + "  - location: " + extension + "\n    writable: false\n",
+			wantErr: "unexpected host mount",
+		},
+		{
+			name:    "snapshot child",
+			mounts:  required + "  - location: " + child + "\n    writable: false\n",
+			wantErr: "unexpected host mount",
+		},
+		{
+			name: "mismatched mount point",
+			mounts: required +
+				"  - location: " + cache + "\n" +
+				"    mountPoint: " + sibling + "\n" +
+				"    writable: false\n",
+			wantErr: "unexpected host mount",
+		},
+		{
+			name: "root does not excuse another path",
+			mounts: required + readOnlyRoot +
+				"  - location: " + sibling + "\n" +
+				"    writable: false\n",
+			wantErr: "unexpected host mount",
+		},
+		{
+			name:    "root does not replace required mounts",
+			mounts:  readOnlyRoot,
+			wantErr: "missing",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "lima.yaml")
+			body := "mountType: virtiofs\nmounts:\n" + tc.mounts
+			if err := os.WriteFile(configPath, []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := ValidateRuntimeMounts(configPath, workspace, "wcl-fixture", "virtiofs")
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("ValidateRuntimeMounts() error = %v", err)
+				}
+				return
+			}
+			// The required-mount maps iterate in random order, so a config that
+			// has only the cache root can report either missing mount first.
+			if tc.wantErr == "missing" {
+				if err == nil ||
+					(!strings.Contains(err.Error(), "missing required writable Workcell mount") &&
+						!strings.Contains(err.Error(), "missing read-only Workcell cache mount")) {
+					t.Fatalf("ValidateRuntimeMounts() error = %v, want a missing required mount", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("ValidateRuntimeMounts() error = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateRuntimeMountsRejectsUnexpectedWritableMount(t *testing.T) {
 	tmp := t.TempDir()
 	home := filepath.Join(tmp, "home")
